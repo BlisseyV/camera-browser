@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#11202A">
+<title>ファインダー付きブラウザ</title>
+<style>
+  :root{
+    --chrome:#11202A;
+    --chrome-soft:#1C303D;
+    --line:#2E4552;
+    --paper:#EFF2F3;
+    --text:#E8EEF1;
+    --text-dim:#8FA6B3;
+    --signal:#D93A2B;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{height:100dvh}
+  body{
+    font-family:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+    background:var(--chrome);color:var(--text);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+
+  /* ---- toolbar ---- */
+  .bar{
+    flex:0 0 auto;display:flex;gap:8px;align-items:center;
+    padding:calc(8px + env(safe-area-inset-top)) 10px 8px;
+    background:var(--chrome);border-bottom:1px solid var(--line);
+  }
+  .bar input{
+    flex:1;min-width:0;height:40px;padding:0 14px;
+    border:1px solid var(--line);border-radius:999px;
+    background:var(--chrome-soft);color:var(--text);
+    font:inherit;font-size:16px;
+  }
+  .bar input::placeholder{color:var(--text-dim)}
+  .bar input:focus{outline:2px solid #5AA9C9;outline-offset:1px}
+  .bar button{
+    height:40px;padding:0 14px;border:0;border-radius:999px;
+    background:#5AA9C9;color:#08151C;font:inherit;font-weight:700;font-size:14px;
+  }
+  .bar button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+
+  /* ---- content ---- */
+  .stage{position:relative;flex:1;min-height:0;background:var(--paper)}
+  iframe{width:100%;height:100%;border:0;display:block;background:var(--paper)}
+  .empty{
+    position:absolute;inset:0;display:grid;place-content:center;gap:10px;
+    padding:28px;text-align:center;color:#5B6B76;
+  }
+  .empty h1{margin:0;font-size:19px;font-weight:700;color:#22323D;line-height:1.5}
+  .empty p{margin:0;font-size:14px;line-height:1.7;max-width:34ch}
+
+  .note{
+    position:absolute;left:10px;right:10px;bottom:10px;
+    display:none;gap:10px;align-items:center;
+    padding:11px 12px;border-radius:12px;
+    background:#22323D;color:var(--text);font-size:13px;line-height:1.5;
+    box-shadow:0 6px 22px rgba(10,20,28,.28);
+  }
+  .note.on{display:flex}
+  .note button{
+    flex:0 0 auto;border:0;border-radius:8px;padding:8px 10px;
+    background:#5AA9C9;color:#08151C;font:inherit;font-weight:700;font-size:13px;
+  }
+
+  /* ---- camera ---- */
+  .cam{
+    position:fixed;width:150px;z-index:30;
+    border-radius:var(--radius);overflow:hidden;
+    background:#0B151B;border:1px solid rgba(255,255,255,.18);
+    box-shadow:0 10px 30px rgba(8,16,22,.45);
+    touch-action:none;user-select:none;
+  }
+  .cam.dragging{box-shadow:0 16px 40px rgba(8,16,22,.6);cursor:grabbing}
+  .cam video{display:block;width:100%;aspect-ratio:3/4;object-fit:cover;background:#0B151B}
+  .cam.mirror video{transform:scaleX(-1)}
+
+  .grab{
+    position:absolute;top:0;left:0;right:0;height:30px;cursor:grab;
+    background:linear-gradient(rgba(8,16,22,.65),transparent);
+    display:flex;align-items:center;gap:6px;padding:0 8px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--signal)}
+  .grab span{font-size:11px;color:rgba(255,255,255,.78);font-weight:600}
+  .grab .hbtn{margin-left:auto;border:0;background:transparent;color:rgba(255,255,255,.85);font-size:15px;padding:2px 6px;line-height:1}
+  .grab .grip{color:rgba(255,255,255,.6);font-size:13px;letter-spacing:2px}
+
+  .cam-ctl{
+    position:absolute;left:0;right:0;bottom:0;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 10px;background:linear-gradient(transparent,rgba(8,16,22,.8));
+  }
+  .cam-ctl button{
+    border:0;background:rgba(255,255,255,.16);color:#fff;
+    width:30px;height:30px;border-radius:50%;font-size:14px;line-height:1;
+  }
+  .shutter{
+    width:46px!important;height:46px!important;border-radius:50%!important;
+    background:#fff!important;border:3px solid rgba(255,255,255,.45)!important;
+    padding:0;
+  }
+  .shutter:active{transform:scale(.92)}
+  .cam-msg{
+    position:absolute;inset:0;display:none;place-content:center;
+    padding:16px;text-align:center;font-size:12px;line-height:1.65;color:#CFE0E8;
+  }
+  .cam.err .cam-msg{display:grid}
+  .cam-msg p{margin:0 0 10px}
+  .cam-msg button{border:0;border-radius:999px;padding:9px 14px;background:#5AA9C9;color:#08151C;font:inherit;font-weight:700;font-size:13px}
+  .cam.err video,.cam.err .cam-ctl{visibility:hidden}
+
+  .cam.min{width:56px!important}
+  .cam.min video,.cam.min .cam-ctl,.cam.min .grab span,.cam.min .grab .grip,.cam.min .grab .hbtn{display:none}
+  .cam.min .pip-open{display:grid}
+  .pip-open{
+    display:none;place-content:center;width:56px;height:56px;
+    background:#0B151B;color:#fff;font-size:20px;border:0;
+  }
+
+  /* ---- shots ---- */
+  .shots{
+    position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom));
+    display:flex;gap:6px;z-index:20;max-width:60vw;overflow-x:auto;padding:2px;
+  }
+  .shots a{
+    flex:0 0 auto;width:46px;height:60px;border-radius:8px;overflow:hidden;
+    border:1px solid rgba(255,255,255,.5);box-shadow:0 4px 14px rgba(8,16,22,.35);
+  }
+  .shots img{width:100%;height:100%;object-fit:cover;display:block}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <input id="q" type="text" inputmode="url" placeholder="検索ワード、または URL" autocomplete="off">
+  <button id="go">開く</button>
+</div>
+
+<div class="stage">
+  <iframe id="view" title="ウェブ表示" referrerpolicy="no-referrer"></iframe>
+  <div class="empty" id="empty">
+    <h1>調べながら、撮る</h1>
+    <p>上のバーに検索ワードかURLを入れると、ここに表示されます。カメラはドラッグでどこへでも動かせます。</p>
+  </div>
+  <div class="note" id="note">
+    <div id="noteText">このサイトは埋め込み表示を拒否しています。</div>
+    <button id="noteOpen">新しいタブで開く</button>
+  </div>
+</div>
+
+<div class="cam" id="cam" style="left:0;top:0">
+  <div class="grab" id="grab">
+    <i class="dot"></i><span>カメラ</span><button id="pip" class="hbtn" title="画面に浮かせる">⧉</button><i class="grip">⋮⋮</i>
+  </div>
+  <button class="pip-open" id="pipOpen" title="カメラを開く">▣</button>
+  <video id="video" playsinline autoplay muted></video>
+  <div class="cam-ctl">
+    <button id="flip" title="前後切り替え">⟳</button>
+    <button class="shutter" id="shot" title="撮影"></button>
+    <button id="size" title="大きさを変える">⤢</button>
+  </div>
+  <div class="cam-msg" id="camMsg"><p id="camText"></p><button id="retry">カメラを開始</button></div>
+</div>
+
+<div class="shots" id="shots"></div>
+<canvas id="canvas" hidden></canvas>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const cam = $('cam'), video = $('video'), camText = $('camText');
+  const view = $('view'), empty = $('empty'), note = $('note');
+
+  /* ---------- ブラウザ部分 ---------- */
+  let lastUrl = '';
+
+  function toUrl(raw){
+    const s = raw.trim();
+    if(!s) return '';
+    if(/^https?:\/\//i.test(s)) return s;
+    if(/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(s) && !/\s/.test(s)) return 'https://' + s;
+    return 'https://duckduckgo.com/?q=' + encodeURIComponent(s);
+  }
+
+  function open(raw){
+    const url = toUrl(raw);
+    if(!url) return;
+    lastUrl = url;
+    note.classList.remove('on');
+    empty.style.display = 'none';
+    let loaded = false;
+    view.onload = () => { loaded = true; note.classList.remove('on'); };
+    view.src = url;
+    setTimeout(() => {
+      if(!loaded){
+        $('noteText').textContent = 'このページは埋め込み表示を拒否しているようです。';
+        note.classList.add('on');
+      }
+    }, 2600);
+  }
+
+  $('go').onclick = () => open($('q').value);
+  $('q').addEventListener('keydown', e => { if(e.key === 'Enter') open($('q').value); });
+  $('noteOpen').onclick = () => { if(lastUrl) window.open(lastUrl, '_blank', 'noopener'); };
+
+  /* ---------- カメラ ---------- */
+  let stream = null, facing = 'environment';
+
+  async function start(){
+    stop();
+    try{
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        throw new Error('unsupported');
+      }
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:1280} },
+        audio:false
+      });
+      video.srcObject = stream;
+      try{ await video.play(); }catch(_){}
+      cam.classList.remove('err');
+      cam.classList.toggle('mirror', facing === 'user');
+    }catch(e){
+      const n = e && e.name;
+      let msg = 'カメラを起動できません。';
+      if(n === 'NotAllowedError') msg = 'カメラの使用が許可されていません。ブラウザのアドレスバーから許可してください。';
+      else if(n === 'NotFoundError') msg = 'カメラが見つかりません。';
+      else if(!window.isSecureContext) msg = 'HTTPS または localhost で開くとカメラを使えます。';
+      else if(e.message === 'unsupported') msg = 'このブラウザはカメラに対応していません。';
+      else msg = 'カメラを起動できません（' + (n || 'エラー') + '）。このページを別タブで開くと動く場合があります。';
+      camText.textContent = msg;
+      cam.classList.add('err');
+    }
+  }
+  function stop(){ if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; } }
+
+  $('retry').onclick = () => start();
+
+  /* iOS: 映像を画面に浮かせる（ピクチャインピクチャ） */
+  $('pip').onclick = async () => {
+    try{
+      if(video.webkitSetPresentationMode){
+        video.webkitSetPresentationMode(video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+      }else if(document.pictureInPictureElement){
+        await document.exitPictureInPicture();
+      }else if(video.requestPictureInPicture){
+        await video.requestPictureInPicture();
+      }else{
+        throw new Error('no-pip');
+      }
+    }catch(e){
+      $('noteText').textContent = 'このブラウザではカメラ映像を浮かせられません。アプリ内の小窓をそのままお使いください。';
+      $('note').classList.add('on');
+    }
+  };
+
+  $('flip').onclick = () => { facing = facing === 'user' ? 'environment' : 'user'; start(); };
+
+  /* 撮影 */
+  $('shot').onclick = () => {
+    if(!stream) return start();
+    const c = $('canvas'), w = video.videoWidth, h = video.videoHeight;
+    if(!w) return;
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if(facing === 'user'){ ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, w, h);
+    c.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const t = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      a.href = url;
+      a.download = `shot-${t.getFullYear()}${pad(t.getMonth()+1)}${pad(t.getDate())}-${pad(t.getHours())}${pad(t.getMinutes())}${pad(t.getSeconds())}.jpg`;
+      a.title = 'タップで保存';
+      a.innerHTML = '<img alt="撮影した写真">';
+      a.querySelector('img').src = url;
+      const s = $('shots');
+      s.prepend(a);
+      while(s.children.length > 6) s.lastChild.remove();
+    }, 'image/jpeg', 0.92);
+  };
+
+  /* 大きさ */
+  const sizes = [110, 150, 210, 280];
+  let si = 1;
+  $('size').onclick = () => {
+    si = (si + 1) % sizes.length;
+    cam.style.width = sizes[si] + 'px';
+    clamp();
+  };
+
+  /* 最小化 */
+  $('grab').addEventListener('dblclick', () => cam.classList.add('min'));
+  $('pipOpen').onclick = () => { cam.classList.remove('min'); clamp(); };
+
+  /* ---------- ドラッグ ---------- */
+  let pos = {x:0, y:0}, drag = null;
+
+  function place(x, y){ pos = {x, y}; cam.style.left = x + 'px'; cam.style.top = y + 'px'; }
+
+  function clamp(){
+    const r = cam.getBoundingClientRect();
+    const maxX = window.innerWidth - r.width - 8;
+    const maxY = window.innerHeight - r.height - 8;
+    place(Math.max(8, Math.min(pos.x, maxX)), Math.max(8, Math.min(pos.y, maxY)));
+  }
+
+  cam.addEventListener('pointerdown', e => {
+    if(e.target.closest('button')) return;
+    const r = cam.getBoundingClientRect();
+    drag = {dx: e.clientX - r.left, dy: e.clientY - r.top, moved:false};
+    cam.setPointerCapture(e.pointerId);
+    cam.classList.add('dragging');
+  });
+
+  cam.addEventListener('pointermove', e => {
+    if(!drag) return;
+    drag.moved = true;
+    place(e.clientX - drag.dx, e.clientY - drag.dy);
+  });
+
+  function endDrag(){
+    if(!drag) return;
+    drag = null;
+    cam.classList.remove('dragging');
+    // 近い側の端にそっと寄せる
+    const r = cam.getBoundingClientRect();
+    const left = r.left + r.width / 2 < window.innerWidth / 2;
+    place(left ? 8 : window.innerWidth - r.width - 8, pos.y);
+    clamp();
+  }
+  cam.addEventListener('pointerup', endDrag);
+  cam.addEventListener('pointercancel', endDrag);
+
+  window.addEventListener('resize', clamp);
+
+  /* 初期位置：右下 */
+  function init(){
+    const r = cam.getBoundingClientRect();
+    place(window.innerWidth - r.width - 12, window.innerHeight - r.height - 12);
+  }
+  init();
+  start();
+})();
+</script>
+</body>
+</html>
