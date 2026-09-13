@@ -84,7 +84,7 @@
   .cam.mirror video{transform:scaleX(-1)}
 
   .grab{
-    position:absolute;top:0;left:0;right:0;height:30px;cursor:grab;
+    position:absolute;top:0;left:0;right:0;height:30px;cursor:grab;z-index:1;
     background:linear-gradient(rgba(8,16,22,.65),transparent);
     display:flex;align-items:center;gap:6px;padding:0 8px;
   }
@@ -118,7 +118,7 @@
   .cam.err video,.cam.err .cam-ctl{visibility:hidden}
 
   .cam.min{width:56px!important}
-  .cam.min video,.cam.min .cam-ctl,.cam.min .grab span,.cam.min .grab .grip,.cam.min .grab .hbtn{display:none}
+  .cam.min video,.cam.min .cam-ctl,.cam.min .grab{display:none}
   .cam.min .pip-open{display:grid}
   .pip-open{
     display:none;place-content:center;width:56px;height:56px;
@@ -148,7 +148,7 @@
   <iframe id="view" title="ウェブ表示" referrerpolicy="no-referrer"></iframe>
   <div class="empty" id="empty">
     <h1>調べながら、撮る</h1>
-    <p>上のバーに検索ワードかURLを入れると、ここに表示されます。カメラはドラッグでどこへでも動かせます。</p>
+    <p>上のバーに検索ワードかURLを入れると、ここに表示されます。カメラはドラッグで移動、ピンチで大きさを変えられます。</p>
   </div>
   <div class="note" id="note">
     <div id="noteText">このサイトは埋め込み表示を拒否しています。</div>
@@ -165,7 +165,7 @@
   <div class="cam-ctl">
     <button id="flip" title="前後切り替え">⟳</button>
     <button class="shutter" id="shot" title="撮影"></button>
-    <button id="size" title="大きさを変える">⤢</button>
+    <button id="size" title="大きさを変える（ピンチでも伸縮できます）">⤢</button>
   </div>
   <div class="cam-msg" id="camMsg"><p id="camText"></p><button id="retry">カメラを開始</button></div>
 </div>
@@ -303,62 +303,167 @@
     }, 'image/jpeg', 0.92);
   };
 
-  /* 大きさ */
-  const sizes = [110, 150, 210, 280];
-  let si = 1;
+  /* 大きさ：ボタンは決まった段階で切り替える（ピンチ後も実寸から続く） */
+  const sizes = [130, 180, 240, 300];
   $('size').onclick = () => {
-    si = (si + 1) % sizes.length;
-    cam.style.width = sizes[si] + 'px';
+    const w = cam.getBoundingClientRect().width;
+    const list = sizes.filter(v => v <= maxWidth());
+    const steps = list.length ? list : [MIN_W];
+    setWidth(steps.find(v => v > w + 1) || steps[0]);
     clamp();
   };
 
-  /* 最小化 */
-  $('grab').addEventListener('dblclick', () => cam.classList.add('min'));
+  /* 最小化：つかみバーをダブルタップ
+     （ドラッグ中は click が枠側に付け替わるため、位置で判定する） */
+  cam.addEventListener('dblclick', e => {
+    const r = cam.getBoundingClientRect();
+    if(e.clientY - r.top <= 30) cam.classList.add('min');
+  });
   $('pipOpen').onclick = () => { cam.classList.remove('min'); clamp(); };
 
-  /* ---------- ドラッグ ---------- */
-  let pos = {x:0, y:0}, drag = null;
+  /* ---------- 移動（1本指）とピンチ伸縮（2本指） ---------- */
+  const MIN_W = 130, MAX_W = 520, EDGE = 8;   // MIN_W: 操作ボタンが収まる最小幅
+  let pos = {x:0, y:0}, drag = null, pinch = null, noClickUntil = 0;
+  const pointers = new Map();
 
   function place(x, y){ pos = {x, y}; cam.style.left = x + 'px'; cam.style.top = y + 'px'; }
 
+  /* 画面に収まる最大幅（高さは幅の約4/3なので縦も見る） */
+  function maxWidth(){
+    return Math.max(MIN_W, Math.min(
+      MAX_W,
+      window.innerWidth - EDGE * 2,
+      (window.innerHeight - EDGE * 2) * 0.75
+    ));
+  }
+
+  function setWidth(w){
+    cam.style.width = Math.round(Math.max(MIN_W, Math.min(w, maxWidth()))) + 'px';
+  }
+
   function clamp(){
     const r = cam.getBoundingClientRect();
-    const maxX = window.innerWidth - r.width - 8;
-    const maxY = window.innerHeight - r.height - 8;
-    place(Math.max(8, Math.min(pos.x, maxX)), Math.max(8, Math.min(pos.y, maxY)));
+    const maxX = window.innerWidth - r.width - EDGE;
+    const maxY = window.innerHeight - r.height - EDGE;
+    place(Math.max(EDGE, Math.min(pos.x, maxX)), Math.max(EDGE, Math.min(pos.y, maxY)));
+  }
+
+  /* 2本指の間隔 */
+  function spread(){
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function startDrag(x, y, onButton){
+    const r = cam.getBoundingClientRect();
+    drag = {dx: x - r.left, dy: y - r.top, sx: x, sy: y, moved: false, onButton: !!onButton};
+    cam.classList.add('dragging');
   }
 
   cam.addEventListener('pointerdown', e => {
-    if(e.target.closest('button')) return;
-    const r = cam.getBoundingClientRect();
-    drag = {dx: e.clientX - r.left, dy: e.clientY - r.top, moved:false};
+    // ボタンのタップは邪魔しない。ただし2本目の指と、最小化中（枠全体がボタン）は拾う
+    if(pointers.size === 0 && e.target.closest('button') && !cam.classList.contains('min')) return;
+    pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
     cam.setPointerCapture(e.pointerId);
-    cam.classList.add('dragging');
+
+    if(pointers.size === 1){
+      startDrag(e.clientX, e.clientY, e.target.closest('button'));
+    }else if(pointers.size === 2 && !cam.classList.contains('min')){
+      const r = cam.getBoundingClientRect();
+      drag = null;
+      cam.classList.remove('dragging');
+      pinch = {
+        dist: spread(),
+        width: r.width,
+        cx: r.left + r.width / 2,
+        cy: r.top + r.height / 2
+      };
+    }
   });
 
   cam.addEventListener('pointermove', e => {
-    if(!drag) return;
-    drag.moved = true;
-    place(e.clientX - drag.dx, e.clientY - drag.dy);
+    const p = pointers.get(e.pointerId);
+    if(!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+
+    if(pinch && pointers.size >= 2){
+      if(!pinch.dist) return;
+      setWidth(pinch.width * (spread() / pinch.dist));
+      // 枠の中心を保ったまま伸縮させる
+      const r = cam.getBoundingClientRect();
+      place(pinch.cx - r.width / 2, pinch.cy - r.height / 2);
+      clamp();
+      noClickUntil = performance.now() + 350;
+    }else if(drag){
+      if(Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 6) drag.moved = true;
+      place(e.clientX - drag.dx, e.clientY - drag.dy);
+    }
   });
 
   function endDrag(){
-    if(!drag) return;
     drag = null;
     cam.classList.remove('dragging');
     // 近い側の端にそっと寄せる
     const r = cam.getBoundingClientRect();
     const left = r.left + r.width / 2 < window.innerWidth / 2;
-    place(left ? 8 : window.innerWidth - r.width - 8, pos.y);
+    place(left ? EDGE : window.innerWidth - r.width - EDGE, pos.y);
     clamp();
   }
-  cam.addEventListener('pointerup', endDrag);
-  cam.addEventListener('pointercancel', endDrag);
 
-  window.addEventListener('resize', clamp);
+  function release(e){
+    const tracked = pointers.delete(e.pointerId);
+    if(pinch && pointers.size < 2){
+      pinch = null;
+      if(pointers.size === 1){
+        // 指が1本残っていれば、そのまま移動を続けられるようにする
+        const [p] = [...pointers.values()];
+        startDrag(p.x, p.y);
+        return;
+      }
+    }
+    // 最小化した枠（全面がボタン）を動かしたときは、復帰させない
+    if(drag && drag.moved && drag.onButton) noClickUntil = performance.now() + 350;
+    // 追跡していない指（ボタンのタップ）で枠を動かすと click が発火しなくなる
+    if(tracked && pointers.size === 0) endDrag();
+  }
+  cam.addEventListener('pointerup', release);
+  cam.addEventListener('pointercancel', release);
+
+  /* ピンチや移動の直後に、撮影などが誤発火しないようにする */
+  cam.addEventListener('click', e => {
+    if(performance.now() < noClickUntil){
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
+
+  /* トラックパッドのピンチ（ctrl+ホイール）でも伸縮できるようにする */
+  cam.addEventListener('wheel', e => {
+    if(!e.ctrlKey || cam.classList.contains('min')) return;
+    e.preventDefault();
+    const r = cam.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    setWidth(r.width * Math.max(0.8, Math.min(1.2, 1 - e.deltaY / 100)));
+    const n = cam.getBoundingClientRect();
+    place(cx - n.width / 2, cy - n.height / 2);
+    clamp();
+  }, {passive:false});
+
+  window.addEventListener('resize', () => {
+    setWidth(cam.getBoundingClientRect().width);
+    clamp();
+  });
+
+  /* 指の状態を取りこぼしたまま残さない（タブ移動などで pointerup が来ない場合） */
+  window.addEventListener('blur', () => {
+    pointers.clear();
+    drag = null; pinch = null;
+    cam.classList.remove('dragging');
+  });
 
   /* 初期位置：右下 */
   function init(){
+    setWidth(cam.getBoundingClientRect().width);   // 小さい画面でも収まるように
     const r = cam.getBoundingClientRect();
     place(window.innerWidth - r.width - 12, window.innerHeight - r.height - 12);
   }
