@@ -108,6 +108,16 @@
     padding:0;
   }
   .shutter:active{transform:scale(.92)}
+  /* 撮影フィードバック：音を鳴らさず、光だけで知らせる */
+  .flash{
+    position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;
+  }
+  .flash.on{animation:flash .28s ease-out}
+  @keyframes flash{from{opacity:.85}to{opacity:0}}
+  @media (prefers-reduced-motion:reduce){
+    .flash.on{animation:none}
+  }
+
   .cam-msg{
     position:absolute;inset:0;display:none;place-content:center;
     padding:16px;text-align:center;font-size:12px;line-height:1.65;color:#CFE0E8;
@@ -162,6 +172,7 @@
   </div>
   <button class="pip-open" id="pipOpen" title="カメラを開く">▣</button>
   <video id="video" playsinline autoplay muted></video>
+  <div class="flash" id="flash"></div>
   <div class="cam-ctl">
     <button id="flip" title="前後切り替え">⟳</button>
     <button class="shutter" id="shot" title="撮影"></button>
@@ -214,6 +225,19 @@
   /* ---------- カメラ ---------- */
   let stream = null, facing = 'environment';
 
+  /* 無音を徹底する：音声は取らない・映像要素も常にミュート */
+  function silence(){
+    video.muted = true;
+    video.defaultMuted = true;
+    video.volume = 0;
+    if(stream) stream.getAudioTracks().forEach(t => {
+      t.enabled = false;
+      t.stop();
+      stream.removeTrack(t);
+    });
+  }
+  silence();
+
   async function start(){
     stop();
     try{
@@ -224,6 +248,7 @@
         video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:1280} },
         audio:false
       });
+      silence();
       video.srcObject = stream;
       try{ await video.play(); }catch(_){}
       cam.classList.remove('err');
@@ -264,11 +289,19 @@
 
   $('flip').onclick = () => { facing = facing === 'user' ? 'environment' : 'user'; start(); };
 
-  /* 撮影 */
+  /* 撮影（常に無音。シャッター音は鳴らさない） */
+  function blink(){
+    const f = $('flash');
+    f.classList.remove('on');
+    void f.offsetWidth;   // アニメーションを再実行させる
+    f.classList.add('on');
+  }
+
   $('shot').onclick = () => {
     if(!stream) return start();
     const c = $('canvas'), w = video.videoWidth, h = video.videoHeight;
     if(!w) return;
+    blink();
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if(facing === 'user'){ ctx.translate(w, 0); ctx.scale(-1, 1); }
